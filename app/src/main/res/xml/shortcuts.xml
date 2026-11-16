@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:shortcutId="block"
+        android:shortcutShortLabel="@string/sc_block">
+        <intent
+            android:action="com.mitturkeyhack.kumanda.W_BLOCK"
+            android:targetClass="com.mitturkeyhack.kumanda.ShortcutActivity"
+            android:targetPackage="com.mitturkeyhack.kumanda" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:shortcutId="free"
+        android:shortcutShortLabel="@string/sc_free">
+        <intent
+            android:action="com.mitturkeyhack.kumanda.W_FREE"
+            android:targetClass="com.mitturkeyhack.kumanda.ShortcutActivity"
+            android:targetPackage="com.mitturkeyhack.kumanda" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:shortcutId="vol"
+        android:shortcutShortLabel="@string/sc_vol">
+        <intent
+            android:action="com.mitturkeyhack.kumanda.W_VOL"
+            android:targetClass="com.mitturkeyhack.kumanda.ShortcutActivity"
+            android:targetPackage="com.mitturkeyhack.kumanda" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:shortcutId="lock"
+        android:shortcutShortLabel="@string/sc_lock">
+        <intent
+            android:action="com.mitturkeyhack.kumanda.W_LOCK"
+            android:targetClass="com.mitturkeyhack.kumanda.ShortcutActivity"
+            android:targetPackage="com.mitturkeyhack.kumanda" />
+    </shortcut>
+</shortcuts>

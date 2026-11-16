@@ -8,6 +8,8 @@ import android.content.Intent;
 public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context c, Intent i) {
-        if (P.ROLE_ALICI.equals(P.role(c))) ListenerService.start(c);
+        String role = P.role(c);
+        if (P.ROLE_ALICI.equals(role)) ListenerService.start(c);
+        else if (P.ROLE_KUMANDA.equals(role)) KumandaService.start(c);
     }
 }

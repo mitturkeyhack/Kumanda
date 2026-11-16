@@ -1,17 +1,19 @@
 package com.mitturkeyhack.kumanda;
 
 import android.accessibilityservice.AccessibilityService;
+import android.content.Context;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 /**
- * Engelli bir uygulama (TikTok / YouTube) öne gelince ana ekrana atar ve
- * "şu an çalışmıyor" uyarısı gösterir. Ekrandaki içerikleri okumaz; sadece
- * hangi uygulamanın açık olduğuna bakar.
+ * Engelli bir uygulama öne gelince ana ekrana atar ve "şu an çalışmıyor" uyarısı gösterir.
+ * Ayrıca TikTok/YouTube'da geçirilen süreyi sayar ve ses tavanını uygular.
+ * Ekrandaki içerikleri okumaz; sadece hangi uygulamanın açık olduğuna bakar.
  */
 public class BlockService extends AccessibilityService {
 
@@ -20,12 +22,16 @@ public class BlockService extends AccessibilityService {
     private final Handler h = new Handler(Looper.getMainLooper());
     private long lastKick;
 
-    // Uygulama zaten açıkken engel başlarsa (ör. gece 23:00) yakalamak için düzenli kontrol
+    // süre sayımı
+    private String curGroup;
+    private long curSince;
+
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
             checkNow();
-            h.postDelayed(this, 20_000);
+            Blocker.enforceCap(BlockService.this);
+            h.postDelayed(this, 15_000);
         }
     };
 
@@ -37,6 +43,24 @@ public class BlockService extends AccessibilityService {
     public static void poke() {
         final BlockService s = instance;
         if (s != null) s.h.post(s::checkNow);
+    }
+
+    /**
+     * Arka plandan ekran açmak için: erişilebilirlik hizmeti açıksa onun üzerinden
+     * başlatır (Android 10+ arka plan kısıtlamasına takılmaz).
+     */
+    public static void launch(Context fallback, Intent i) {
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        BlockService s = instance;
+        try {
+            if (s != null) s.startActivity(i);
+            else fallback.startActivity(i);
+        } catch (Exception e) {
+            try {
+                fallback.startActivity(i);
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     @Override
@@ -60,19 +84,42 @@ public class BlockService extends AccessibilityService {
             AccessibilityNodeInfo root = getRootInActiveWindow();
             if (root != null && root.getPackageName() != null) {
                 handle(root.getPackageName().toString());
+            } else {
+                account(null);
             }
         } catch (Exception ignored) {
         }
     }
 
+    /** Önceki uygulamada geçen süreyi yazar, yenisini başlatır. */
+    private void account(String pkg) {
+        long now = SystemClock.elapsedRealtime();
+        if (curGroup != null) {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && pm.isInteractive()) {
+                long d = Math.min(now - curSince, 30_000); // en fazla 30 sn (bir kontrol aralığı)
+                Blocker.addUse(this, curGroup, (int) (d / 1000));
+            }
+        }
+        curGroup = Blocker.group(pkg);
+        curSince = now;
+    }
+
     private void handle(String pkg) {
         if (!P.ROLE_ALICI.equals(P.role(this))) return;
-        if (pkg.equals(getPackageName())) return;
+        if (pkg.equals(getPackageName())) {
+            account(null);
+            return;
+        }
+        // Klavye, bildirim paneli vb. sistem pencereleri süreyi bölmesin
+        if (pkg.equals("com.android.systemui") || pkg.contains("inputmethod")) return;
+        account(pkg);
         final String label = Blocker.blockedLabel(this, pkg);
         if (label == null) return;
         long now = SystemClock.elapsedRealtime();
         if (now - lastKick < 1500) return;
         lastKick = now;
+        account(null);
         performGlobalAction(GLOBAL_ACTION_HOME);
         h.postDelayed(() -> {
             try {

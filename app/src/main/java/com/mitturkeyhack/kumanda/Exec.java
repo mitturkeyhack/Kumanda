@@ -11,14 +11,23 @@ import android.content.IntentFilter;
 import android.media.AudioManager;
 import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.provider.Settings;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 
 /** Alıcı telefonda gelen komutu uygular. */
 public final class Exec {
 
     public static final class Result {
-        public final String text;
+        public final String text;    // null = tek cevap yok
         public final Runnable after; // cevap gönderildikten SONRA yapılacak iş (ör. Wi-Fi kapatma)
+        public final List<String[]> extra = new ArrayList<>(); // ek cevaplar: {komut, içerik}
 
         Result(String text, Runnable after) {
             this.text = text;
@@ -62,6 +71,28 @@ public final class Exec {
                     return night(c, arg);
                 case "STATUS":
                     return ok(status(c));
+                case "BLOCKSET":
+                    return blockSet(c, arg);
+                case "APPS":
+                    return apps(c);
+                case "LIMIT":
+                    return limit(c, arg);
+                case "CAP":
+                    return cap(c, arg);
+                case "MSG":
+                    return message(c, arg);
+                case "RING": {
+                    int sec = 30;
+                    try {
+                        sec = Integer.parseInt(arg);
+                    } catch (Exception ignored) {
+                    }
+                    Ringer.start(c, sec);
+                    return ok("Telefon çalıyor 🔔 (" + sec + " sn)");
+                }
+                case "RING_STOP":
+                    Ringer.stop(null);
+                    return ok("Çalma durduruldu");
                 default:
                     return ok("Bilinmeyen komut: " + cmd + " (uygulamayı güncelle)");
             }
@@ -85,6 +116,9 @@ public final class Exec {
         int max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
         int v = Math.round(max * pct / 100f);
         am.setStreamVolume(AudioManager.STREAM_MUSIC, v, 0);
+        if (Blocker.enforceCap(c)) {
+            return ok("Ses tavanı açık: ses %" + P.num(c, Blocker.K_CAP_PCT, 30) + "'de tutuldu");
+        }
         return ok(pct == 0 ? "Ses kapatıldı 🔇" : "Ses %" + pct + " yapıldı 🔊");
     }
 
@@ -140,7 +174,11 @@ public final class Exec {
         if (arg == null || arg.length() != 3) return ok("Geçersiz engel komutu");
         boolean on = arg.charAt(2) == '1';
         String app;
-        if (arg.startsWith("TT")) {
+        if (arg.startsWith("AL")) {
+            P.put(c, Blocker.K_TIKTOK, on);
+            P.put(c, Blocker.K_YOUTUBE, on);
+            app = "TikTok ve YouTube";
+        } else if (arg.startsWith("TT")) {
             P.put(c, Blocker.K_TIKTOK, on);
             app = "TikTok";
         } else {
@@ -195,8 +233,133 @@ public final class Exec {
                     .append(Blocker.hhmm(P.num(c, Blocker.K_NIGHT_END, 0)));
             if (Blocker.nightActive(c)) sb.append(" (şu an aktif)");
         }
+        for (String g : new String[]{"TT", "YT"}) {
+            int lim = Blocker.limitMin(c, g);
+            if (lim > 0) {
+                sb.append(", ").append(Blocker.groupName(g)).append(" bugün ")
+                        .append(Blocker.usedSec(c, g) / 60).append("/").append(lim).append(" dk");
+            }
+        }
+        Set<String> cs = Blocker.custom(c);
+        if (!cs.isEmpty()) sb.append(", ").append(cs.size()).append(" uygulama daha engelli");
+        if (P.bool(c, Blocker.K_CAP_ON)) {
+            sb.append(", ses tavanı %").append(P.num(c, Blocker.K_CAP_PCT, 30));
+            if (!P.bool(c, Blocker.K_CAP_ALL)) {
+                sb.append(" (").append(Blocker.hhmm(P.num(c, Blocker.K_CAP_S, 0))).append("–")
+                        .append(Blocker.hhmm(P.num(c, Blocker.K_CAP_E, 0))).append(")");
+            }
+        }
         if (!BlockService.isRunning()) sb.append(" ⚠ Erişilebilirlik kapalı");
         return sb.toString();
+    }
+
+    private static String warnAcc() {
+        return BlockService.isRunning() ? "" : " (UYARI: Erişilebilirlik izni kapalı, engel çalışmaz!)";
+    }
+
+    private static Result blockSet(Context c, String arg) {
+        StringBuilder clean = new StringBuilder();
+        List<String> names = new ArrayList<>();
+        if (arg != null) {
+            for (String p : arg.split(",")) {
+                p = p.trim();
+                if (p.isEmpty()) continue;
+                if (clean.length() > 0) clean.append(',');
+                clean.append(p);
+                names.add(Blocker.label(c, p));
+            }
+        }
+        P.put(c, Blocker.K_CUSTOM, clean.toString());
+        BlockService.poke();
+        if (names.isEmpty()) return ok("Diğer uygulamaların engeli kaldırıldı ✅");
+        return ok("Engellenen uygulamalar: " + String.join(", ", names) + " ⛔" + warnAcc());
+    }
+
+    /** Telefondaki uygulamaların listesini parça parça gönderir. */
+    private static Result apps(Context c) {
+        PackageManager pm = c.getPackageManager();
+        Intent main = new Intent(Intent.ACTION_MAIN);
+        main.addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> list = pm.queryIntentActivities(main, 0);
+        Set<String> blocked = Blocker.custom(c);
+        List<String> lines = new ArrayList<>();
+        List<String> seen = new ArrayList<>();
+        for (ResolveInfo ri : list) {
+            String pkg = ri.activityInfo.packageName;
+            if (pkg.equals(c.getPackageName()) || seen.contains(pkg)) continue;
+            seen.add(pkg);
+            String label = ri.loadLabel(pm).toString().replace('\t', ' ').replace('\n', ' ').replace('|', '/');
+            lines.add((blocked.contains(pkg) ? "+" : "-") + "\t" + label + "\t" + pkg);
+        }
+        Collections.sort(lines, (a, b) -> a.substring(2).compareToIgnoreCase(b.substring(2)));
+        List<String> chunks = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        for (String l : lines) {
+            if (cur.length() > 0 && cur.toString().getBytes(StandardCharsets.UTF_8).length + l.length() * 2 > 2600) {
+                chunks.add(cur.toString());
+                cur.setLength(0);
+            }
+            if (cur.length() > 0) cur.append('\n');
+            cur.append(l);
+        }
+        if (cur.length() > 0 || chunks.isEmpty()) chunks.add(cur.toString());
+        Result r = new Result(null, null);
+        for (int i = 0; i < chunks.size(); i++) {
+            r.extra.add(new String[]{"APPS", (i + 1) + "/" + chunks.size() + "\n" + chunks.get(i)});
+        }
+        return r;
+    }
+
+    private static Result limit(Context c, String arg) {
+        // arg: "TT,60" / "YT,0"
+        String[] p = arg.split(",");
+        String g = "TT".equals(p[0]) ? "TT" : "YT";
+        int min = Integer.parseInt(p[1]);
+        P.put(c, "limit_" + g, min);
+        BlockService.poke();
+        String name = Blocker.groupName(g);
+        if (min <= 0) return ok(name + " süre sınırı kaldırıldı");
+        int used = Blocker.usedSec(c, g) / 60;
+        return ok(name + " günde " + dur(min) + " ile sınırlandı ⏱️ (bugün " + used + " dk kullanıldı)" + warnAcc());
+    }
+
+    private static Result cap(Context c, String arg) {
+        // arg: "OFF" / "30,ALL" / "30,1320,420"
+        if (arg == null || arg.equals("OFF")) {
+            P.put(c, Blocker.K_CAP_ON, false);
+            return ok("Ses tavanı kaldırıldı");
+        }
+        String[] p = arg.split(",");
+        int pct = Integer.parseInt(p[0]);
+        P.put(c, Blocker.K_CAP_PCT, pct);
+        P.put(c, Blocker.K_CAP_ON, true);
+        String when;
+        if (p.length >= 3) {
+            int s = Integer.parseInt(p[1]), e = Integer.parseInt(p[2]);
+            P.put(c, Blocker.K_CAP_ALL, false);
+            P.put(c, Blocker.K_CAP_S, s);
+            P.put(c, Blocker.K_CAP_E, e);
+            when = Blocker.hhmm(s) + "–" + Blocker.hhmm(e) + " arası";
+        } else {
+            P.put(c, Blocker.K_CAP_ALL, true);
+            when = "her zaman";
+        }
+        Blocker.enforceCap(c);
+        return ok("Ses tavanı: " + when + " en fazla %" + pct + " 🔉");
+    }
+
+    private static Result message(Context c, String arg) {
+        // arg: "1\nmetin" (1 = sesli oku)
+        boolean speak = arg.startsWith("1");
+        int nl = arg.indexOf('\n');
+        String text = nl >= 0 ? arg.substring(nl + 1) : arg;
+        Intent i = new Intent(c, MessageActivity.class);
+        i.putExtra("text", text);
+        i.putExtra("speak", speak);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        BlockService.launch(c, i);
+        Notifs.message(c, text, i);
+        return ok("Mesaj ekranda gösterildi 💬" + (speak ? " (sesli okundu)" : ""));
     }
 
     @SuppressWarnings("unused")

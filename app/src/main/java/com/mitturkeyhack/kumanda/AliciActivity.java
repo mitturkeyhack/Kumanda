@@ -280,7 +280,8 @@ public class AliciActivity extends Activity {
                 .setPositiveButton("Sıfırla", (d, w) -> {
                     P.sp(this).edit().remove("role").remove("my_code").remove("last_time").remove("seen_ids")
                             .putBoolean(Blocker.K_TIKTOK, false).putBoolean(Blocker.K_YOUTUBE, false)
-                            .putBoolean(Blocker.K_NIGHT_ON, false).apply();
+                            .putBoolean(Blocker.K_NIGHT_ON, false).putBoolean(Blocker.K_CAP_ON, false)
+                            .remove(Blocker.K_CUSTOM).remove(Blocker.K_LIMIT_TT).remove(Blocker.K_LIMIT_YT).apply();
                     ListenerService.stop(this);
                     startActivity(new Intent(this, MainActivity.class));
                     finish();

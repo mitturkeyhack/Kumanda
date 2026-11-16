@@ -5,8 +5,11 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.BatteryManager;
 import android.os.IBinder;
 import android.os.PowerManager;
 
@@ -30,6 +33,37 @@ public class ListenerService extends Service {
     private volatile boolean running;
     private volatile HttpURLConnection conn;
     private Thread th;
+
+    // Ses tuşlarına basılınca ses tavanını uygula
+    private final BroadcastReceiver volRx = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            Blocker.enforceCap(c);
+        }
+    };
+
+    // Şarj %15'in altına inince Kumanda'ya haber ver
+    private final BroadcastReceiver batRx = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            int lvl = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int sc = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+            int plugged = i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
+            if (lvl < 0 || sc <= 0) return;
+            int pct = Math.round(lvl * 100f / sc);
+            boolean warned = P.bool(c, "bat_warned");
+            if (plugged != 0 || pct >= 30) {
+                if (warned) P.put(c, "bat_warned", false);
+                return;
+            }
+            if (pct <= 15 && !warned) {
+                P.put(c, "bat_warned", true);
+                final String code = P.myCode(c);
+                final String msg = "🔋 Şarj %" + pct + " — prize takılması lazım";
+                new Thread(() -> Proto.post(Proto.replyTopic(code), Proto.pack(code, "ALERT", msg))).start();
+            }
+        }
+    };
 
     public static void start(Context c) {
         try {
@@ -61,6 +95,9 @@ public class ListenerService extends Service {
                 .build();
         startForeground(1, n);
 
+        registerReceiver(volRx, new IntentFilter("android.media.VOLUME_CHANGED_ACTION"));
+        registerReceiver(batRx, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+
         running = true;
         th = new Thread(this::loop, "kumanda-dinle");
         th.start();
@@ -83,6 +120,11 @@ public class ListenerService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        try {
+            unregisterReceiver(volRx);
+            unregisterReceiver(batRx);
+        } catch (Exception ignored) {
+        }
         HttpURLConnection c = conn;
         if (c != null) {
             try {
@@ -163,7 +205,8 @@ public class ListenerService extends Service {
             wl.acquire(30_000);
             try {
                 Exec.Result r = Exec.run(this, cm[0], cm[1]);
-                Proto.post(Proto.replyTopic(code), Proto.pack(code, "ACK", r.text));
+                if (r.text != null) Proto.post(Proto.replyTopic(code), Proto.pack(code, "ACK", r.text));
+                for (String[] x : r.extra) Proto.post(Proto.replyTopic(code), Proto.pack(code, x[0], x[1]));
                 if (r.after != null) {
                     try {
                         Thread.sleep(800);

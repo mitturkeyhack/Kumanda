@@ -53,6 +53,7 @@ public class MainActivity extends Activity {
                 "Diğer telefonları BU telefondan yöneteceğim.\n(Senin telefonun — A35)",
                 Ui.BLUE, () -> {
                     P.setRole(this, P.ROLE_KUMANDA);
+                    KumandaService.start(this);
                     go(KumandaActivity.class);
                 }));
 

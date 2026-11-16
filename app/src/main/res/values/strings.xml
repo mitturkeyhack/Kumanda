@@ -2,5 +2,9 @@
 <resources>
     <string name="app_name">Kumanda</string>
     <string name="acc_label">Kumanda uygulama engeli</string>
-    <string name="acc_desc">Kumanda\'dan engellenen uygulamalar (TikTok, YouTube) açılınca kapatır ve uyarı gösterir. Başka hiçbir şeyi okumaz.</string>
+    <string name="acc_desc">Kumanda\'dan engellenen uygulamalar (TikTok, YouTube vb.) açılınca kapatır ve uyarı gösterir. Bu uygulamalarda geçen süreyi sayar. Ekrandaki yazıları okumaz.</string>
+    <string name="sc_block">TikTok+YouTube engelle</string>
+    <string name="sc_free">Serbest bırak</string>
+    <string name="sc_vol">Sesi kıs</string>
+    <string name="sc_lock">Ekranı kilitle</string>
 </resources>

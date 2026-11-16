@@ -2,14 +2,19 @@ package com.mitturkeyhack.kumanda;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.ProgressDialog;
 import android.app.TimePickerDialog;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.text.InputType;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
@@ -18,92 +23,74 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
-import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 
 /** A35'teki kumanda ekranı. */
 public class KumandaActivity extends Activity {
 
-    private static final class Device {
-        String name;
-        String code;
-
-        Device(String n, String c) {
-            name = n;
-            code = c;
-        }
-    }
-
     private final Handler h = new Handler(Looper.getMainLooper());
-    private final List<Device> devices = new ArrayList<>();
+    private List<Devices.Device> devices = new ArrayList<>();
     private int selected = 0; // -1 = tümü
 
     private LinearLayout chips;
     private TextView logView;
     private TextView targetLabel;
+    private Button batteryBtn;
 
-    private volatile boolean streaming;
-    private volatile HttpURLConnection streamConn;
-    private Thread streamThread;
+    private ProgressDialog appsWait;
+    private Devices.Device appsFor;
+
+    private final Runnable logListener = this::renderLog;
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         getWindow().setStatusBarColor(Ui.BG);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
-        loadDevices();
+        devices = Devices.load(this);
         selected = P.num(this, "selected", 0);
         build();
     }
 
-    // ---------- Cihaz listesi ----------
-
-    private void loadDevices() {
-        devices.clear();
-        try {
-            JSONArray a = new JSONArray(P.str(this, "devices", "[]"));
-            for (int i = 0; i < a.length(); i++) {
-                JSONObject o = a.getJSONObject(i);
-                devices.add(new Device(o.getString("name"), o.getString("code")));
-            }
-        } catch (Exception ignored) {
-        }
+    @Override
+    protected void onResume() {
+        super.onResume();
+        KumandaService.start(this);
+        KLog.listener = logListener;
+        KumandaService.appsListener = this::onApps;
+        renderLog();
+        if (batteryBtn != null) batteryBtn.setVisibility(batteryOk() ? View.GONE : View.VISIBLE);
     }
 
-    private void saveDevices() {
-        JSONArray a = new JSONArray();
-        try {
-            for (Device d : devices) {
-                JSONObject o = new JSONObject();
-                o.put("name", d.name);
-                o.put("code", d.code);
-                a.put(o);
-            }
-        } catch (Exception ignored) {
-        }
-        P.put(this, "devices", a.toString());
+    @Override
+    protected void onPause() {
+        if (KLog.listener == logListener) KLog.listener = null;
+        KumandaService.appsListener = null;
+        super.onPause();
     }
 
-    private List<Device> targets() {
-        List<Device> t = new ArrayList<>();
+    private List<Devices.Device> targets() {
+        List<Devices.Device> t = new ArrayList<>();
         if (devices.isEmpty()) return t;
         if (selected < 0) return new ArrayList<>(devices);
         if (selected >= devices.size()) selected = 0;
         t.add(devices.get(selected));
         return t;
+    }
+
+    private Devices.Device single() {
+        if (devices.isEmpty()) {
+            Toast.makeText(this, "Önce bir telefon ekle", Toast.LENGTH_SHORT).show();
+            return null;
+        }
+        if (selected < 0) {
+            Toast.makeText(this, "Bunun için yukarıdan tek bir telefon seç", Toast.LENGTH_LONG).show();
+            return null;
+        }
+        return targets().get(0);
     }
 
     // ---------- Ekran ----------
@@ -119,7 +106,6 @@ public class KumandaActivity extends Activity {
 
         root.addView(Ui.text(this, "Kumanda", 28, Ui.TEXT, true));
 
-        // Telefon seçici
         HorizontalScrollView hs = new HorizontalScrollView(this);
         hs.setHorizontalScrollBarEnabled(false);
         chips = new LinearLayout(this);
@@ -132,6 +118,14 @@ public class KumandaActivity extends Activity {
         targetLabel.setPadding(Ui.dp(this, 2), 0, 0, Ui.dp(this, 10));
         root.addView(targetLabel);
 
+        // Hızlı
+        LinearLayout c0 = Ui.card(this);
+        c0.addView(Ui.section(this, "⚡  Hızlı"));
+        c0.addView(Ui.row(this,
+                cmdBtn("⛔ TikTok + YouTube engelle", Ui.RED, "BLOCK", "AL1"),
+                cmdBtn("✅ İkisini de serbest bırak", Ui.GREEN, "BLOCK", "AL0")));
+        root.addView(c0);
+
         // Ses
         LinearLayout c1 = Ui.card(this);
         c1.addView(Ui.section(this, "🔊  Ses (medya)"));
@@ -141,6 +135,10 @@ public class KumandaActivity extends Activity {
         c1.addView(Ui.row(this,
                 cmdBtn("Orta (%60)", Ui.SLATE, "VOL", "60"),
                 cmdBtn("Sonuna kadar", Ui.BLUE, "VOL", "100")));
+        Button cap = Ui.btn(this, "🔉 Ses tavanı…", Ui.PURPLE);
+        cap.setOnClickListener(v -> askCap());
+        c1.addView(Ui.row(this, cap, cmdBtn("Tavanı kaldır", Ui.SLATE, "CAP", "OFF")));
+        c1.addView(hint("Ses tavanı: sesi açmaya çalışsalar bile seçtiğin seviyenin üstüne çıkmaz."));
         root.addView(c1);
 
         // Uygulamalar
@@ -152,11 +150,17 @@ public class KumandaActivity extends Activity {
         c2.addView(Ui.row(this,
                 cmdBtn("YouTube engelle", Ui.RED, "BLOCK", "YT1"),
                 cmdBtn("YouTube serbest", Ui.GREEN, "BLOCK", "YT0")));
-        Button night = Ui.btn(this, "🌙 Gece engeli ayarla", Ui.PURPLE);
+        Button night = Ui.btn(this, "🌙 Gece engeli…", Ui.PURPLE);
         night.setOnClickListener(v -> askNight());
         c2.addView(Ui.row(this, night, cmdBtn("Gece engeli kapat", Ui.SLATE, "NIGHT", "OFF")));
-        TextView nh = Ui.text(this, "Gece engeli her gün seçtiğin saatler arasında TikTok ve YouTube'u otomatik kapatır.", 12, Ui.MUTED, false);
-        c2.addView(nh);
+        Button limit = Ui.btn(this, "⏱️ Günlük süre…", Ui.ORANGE);
+        limit.setOnClickListener(v -> askLimit());
+        Button other = Ui.btn(this, "📋 Diğer uygulamalar…", Ui.BLUE);
+        other.setOnClickListener(v -> requestApps());
+        c2.addView(Ui.row(this, limit, other));
+        c2.addView(hint("Gece engeli: her gün seçtiğin saatlerde TikTok ve YouTube kapanır.\n"
+                + "Günlük süre: ör. TikTok günde 1 saat; dolunca o gün açılmaz.\n"
+                + "Diğer uygulamalar: telefondaki listeden istediğini (Instagram, oyun…) seç."));
         root.addView(c2);
 
         // Bağlantı
@@ -170,12 +174,18 @@ public class KumandaActivity extends Activity {
                 cmdBtn("Bluetooth kapat", Ui.RED, "BT_OFF", "")));
         root.addView(c3);
 
-        // Diğer
+        // Telefon
         LinearLayout c4 = Ui.card(this);
         c4.addView(Ui.section(this, "📱  Telefon"));
+        Button msg = Ui.btn(this, "💬 Mesaj gönder…", Ui.BLUE);
+        msg.setOnClickListener(v -> askMessage());
+        Button ring = Ui.btn(this, "🔔 Telefonu çaldır", Ui.PINK);
+        ring.setOnClickListener(v -> send("RING", "30", "Telefonu çaldır (30 sn)"));
+        c4.addView(Ui.row(this, msg, ring));
         c4.addView(Ui.row(this,
                 cmdBtn("🔒 Ekranı kilitle", Ui.ORANGE, "LOCK", ""),
-                cmdBtn("ℹ️ Durumu sor", Ui.BLUE, "STATUS", "")));
+                cmdBtn("ℹ️ Durumu sor", Ui.SLATE, "STATUS", "")));
+        c4.addView(Ui.row(this, cmdBtn("Çalmayı durdur", Ui.SLATE, "RING_STOP", "")));
         root.addView(c4);
 
         // Cevaplar
@@ -192,6 +202,20 @@ public class KumandaActivity extends Activity {
         c5.addView(clr);
         root.addView(c5);
 
+        // Bu telefon
+        LinearLayout c6 = Ui.card(this);
+        c6.addView(Ui.section(this, "⚙️  Bu telefon"));
+        c6.addView(hint("Şarj uyarıları (%15 altı) uygulama kapalıyken de bildirim olarak gelir.\n"
+                + "Ana ekran kısayolu: boş bir yere basılı tut › Widget'lar › Kumanda. "
+                + "Ya da uygulama simgesine basılı tut."));
+        batteryBtn = Ui.btn(this, "Bildirimler gecikmesin: pil kısıtlamasını kaldır", Ui.SLATE);
+        batteryBtn.setOnClickListener(v -> openBattery());
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        blp.setMargins(0, Ui.dp(this, 10), 0, 0);
+        c6.addView(batteryBtn, blp);
+        root.addView(c6);
+
         Button reset = Ui.flatBtn(this, "Rolü sıfırla", Ui.MUTED);
         reset.setOnClickListener(v -> confirmReset());
         root.addView(reset);
@@ -199,6 +223,12 @@ public class KumandaActivity extends Activity {
         setContentView(sv);
         renderChips();
         renderLog();
+    }
+
+    private TextView hint(String s) {
+        TextView t = Ui.text(this, s, 12, Ui.MUTED, false);
+        t.setLineSpacing(0, 1.1f);
+        return t;
     }
 
     private Button cmdBtn(String label, int color, final String cmd, final String arg) {
@@ -217,11 +247,10 @@ public class KumandaActivity extends Activity {
         }
         Button add = Ui.btn(this, "＋ Telefon ekle", Ui.TEXT);
         add.setMinHeight(Ui.dp(this, 44));
-        add.setOnClickListener(v -> askAdd());
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         add.setPadding(Ui.dp(this, 16), 0, Ui.dp(this, 16), 0);
-        chips.addView(add, lp);
+        add.setOnClickListener(v -> askAdd());
+        chips.addView(add, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         if (devices.isEmpty()) {
             targetLabel.setText("Önce annenin/babanın telefonunu ekle: o telefonda Alıcı ekranındaki kodu gir.");
@@ -255,13 +284,10 @@ public class KumandaActivity extends Activity {
         return b;
     }
 
-    // ---------- Diyaloglar ----------
+    // ---------- Telefon ekle / sil ----------
 
     private void askAdd() {
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-        int p = Ui.dp(this, 20);
-        l.setPadding(p, Ui.dp(this, 8), p, 0);
+        LinearLayout l = dialogBox();
         final EditText name = new EditText(this);
         name.setHint("Ad (ör. Annem)");
         name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
@@ -270,9 +296,7 @@ public class KumandaActivity extends Activity {
         code.setHint("Kod (ör. ABCD-EFGH-JKLM)");
         code.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         l.addView(code);
-        TextView t = Ui.text(this, "Kod, diğer telefonda Kumanda › Alıcı ekranında yazıyor.", 13, Ui.MUTED, false);
-        t.setPadding(0, Ui.dp(this, 6), 0, 0);
-        l.addView(t);
+        l.addView(hint("Kod, diğer telefonda Kumanda › Alıcı ekranında yazıyor."));
 
         final AlertDialog d = new AlertDialog.Builder(this)
                 .setTitle("Telefon ekle")
@@ -293,15 +317,15 @@ public class KumandaActivity extends Activity {
             }
             String nc = Proto.norm(c);
             String pretty = nc.substring(0, 4) + "-" + nc.substring(4, 8) + "-" + nc.substring(8, 12);
-            devices.add(new Device(n, pretty));
-            saveDevices();
+            devices.add(new Devices.Device(n, pretty));
+            Devices.save(this, devices);
             selected = devices.size() - 1;
             P.put(this, "selected", selected);
             renderChips();
-            restartStream();
+            KumandaService.reload(this);
             d.dismiss();
-            // Bağlantıyı dene
-            sendTo(devices.get(selected), "PING", "", "Bağlantı testi");
+            final Devices.Device dev = devices.get(selected);
+            h.postDelayed(() -> Sender.send(this, dev, "PING", "", "Bağlantı testi", true), 1500);
         }));
         d.show();
     }
@@ -312,34 +336,31 @@ public class KumandaActivity extends Activity {
                 .setNegativeButton("Vazgeç", null)
                 .setPositiveButton("Sil", (d, w) -> {
                     devices.remove(idx);
-                    saveDevices();
+                    Devices.save(this, devices);
                     selected = 0;
-                    P.put(this, "selected", selected);
+                    P.put(this, "selected", 0);
                     renderChips();
-                    restartStream();
+                    KumandaService.reload(this);
                 })
                 .show();
     }
+
+    private LinearLayout dialogBox() {
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.VERTICAL);
+        int p = Ui.dp(this, 22);
+        l.setPadding(p, Ui.dp(this, 8), p, 0);
+        return l;
+    }
+
+    // ---------- Diyaloglar ----------
 
     private void askWifiOff() {
         final String[] items = {"15 dakika", "1 saat", "Sabah 07:00'ye kadar", "Süresiz (dikkat!)"};
         new AlertDialog.Builder(this)
                 .setTitle("Wi‑Fi ne kadar kapalı kalsın?")
                 .setItems(items, (d, which) -> {
-                    int min;
-                    switch (which) {
-                        case 0:
-                            min = 15;
-                            break;
-                        case 1:
-                            min = 60;
-                            break;
-                        case 2:
-                            min = minutesUntil(7, 0);
-                            break;
-                        default:
-                            min = 0;
-                    }
+                    int min = which == 0 ? 15 : which == 1 ? 60 : which == 2 ? minutesUntil(7, 0) : 0;
                     if (min == 0) {
                         new AlertDialog.Builder(this)
                                 .setTitle("Emin misin?")
@@ -364,19 +385,191 @@ public class KumandaActivity extends Activity {
         return (int) Math.max(1, (t.getTimeInMillis() - now.getTimeInMillis()) / 60000L);
     }
 
-    private void askNight() {
-        int s0 = P.num(this, "night_s", 23 * 60);
-        int e0 = P.num(this, "night_e", 7 * 60);
-        Toast.makeText(this, "Önce BAŞLANGIÇ saatini seç", Toast.LENGTH_SHORT).show();
+    /** İki saat seçtirir (başlangıç, bitiş). */
+    private interface RangeCb {
+        void onRange(int s, int e);
+    }
+
+    private void pickRange(String what, int s0, int e0, RangeCb cb) {
+        Toast.makeText(this, what + ": önce BAŞLANGIÇ saatini seç", Toast.LENGTH_SHORT).show();
         new TimePickerDialog(this, (v1, sh, sm) -> {
             Toast.makeText(this, "Şimdi BİTİŞ saatini seç", Toast.LENGTH_SHORT).show();
-            new TimePickerDialog(this, (v2, eh, em) -> {
-                int s = sh * 60 + sm, e = eh * 60 + em;
-                P.put(this, "night_s", s);
-                P.put(this, "night_e", e);
-                send("NIGHT", s + "-" + e, "Gece engeli " + Blocker.hhmm(s) + "–" + Blocker.hhmm(e));
-            }, e0 / 60, e0 % 60, true).show();
+            new TimePickerDialog(this, (v2, eh, em) -> cb.onRange(sh * 60 + sm, eh * 60 + em),
+                    e0 / 60, e0 % 60, true).show();
         }, s0 / 60, s0 % 60, true).show();
+    }
+
+    private void askNight() {
+        pickRange("Gece engeli", P.num(this, "night_s", 23 * 60), P.num(this, "night_e", 7 * 60), (s, e) -> {
+            P.put(this, "night_s", s);
+            P.put(this, "night_e", e);
+            send("NIGHT", s + "-" + e, "Gece engeli " + Blocker.hhmm(s) + "–" + Blocker.hhmm(e));
+        });
+    }
+
+    private void askCap() {
+        final int[] pcts = {20, 30, 40, 50, 60};
+        String[] items = new String[pcts.length];
+        for (int i = 0; i < pcts.length; i++) items[i] = "En fazla %" + pcts[i];
+        new AlertDialog.Builder(this)
+                .setTitle("Ses en fazla ne kadar olsun?")
+                .setItems(items, (d, which) -> {
+                    final int pct = pcts[which];
+                    new AlertDialog.Builder(this)
+                            .setTitle("Ne zaman geçerli olsun?")
+                            .setItems(new String[]{"Her zaman", "Sadece belli saatlerde (ör. gece)"}, (d2, w2) -> {
+                                if (w2 == 0) {
+                                    send("CAP", pct + ",ALL", "Ses tavanı %" + pct + " (her zaman)");
+                                } else {
+                                    pickRange("Ses tavanı", P.num(this, "cap_s", 22 * 60), P.num(this, "cap_e", 7 * 60), (s, e) -> {
+                                        P.put(this, "cap_s", s);
+                                        P.put(this, "cap_e", e);
+                                        send("CAP", pct + "," + s + "," + e,
+                                                "Ses tavanı %" + pct + " (" + Blocker.hhmm(s) + "–" + Blocker.hhmm(e) + ")");
+                                    });
+                                }
+                            })
+                            .show();
+                })
+                .show();
+    }
+
+    private void askLimit() {
+        new AlertDialog.Builder(this)
+                .setTitle("Hangi uygulama?")
+                .setItems(new String[]{"TikTok", "YouTube"}, (d, which) -> {
+                    final String g = which == 0 ? "TT" : "YT";
+                    final String name = which == 0 ? "TikTok" : "YouTube";
+                    final int[] mins = {30, 60, 90, 120, 180, 0};
+                    String[] items = {"30 dakika", "1 saat", "1,5 saat", "2 saat", "3 saat", "Sınırı kaldır"};
+                    new AlertDialog.Builder(this)
+                            .setTitle(name + " günde en fazla ne kadar?")
+                            .setItems(items, (d2, w2) -> {
+                                int m = mins[w2];
+                                send("LIMIT", g + "," + m, m == 0 ? name + " süre sınırını kaldır"
+                                        : name + " günde " + Exec.dur(m));
+                            })
+                            .show();
+                })
+                .show();
+    }
+
+    private void askMessage() {
+        LinearLayout l = dialogBox();
+        final EditText text = new EditText(this);
+        text.setHint("Mesajını yaz…");
+        text.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        text.setMinLines(2);
+        l.addView(text);
+
+        String[] quick = {"Yemek hazır 🍲", "Hadi yatın artık 😊", "Beni arar mısınız? 📞", "Sesi biraz kısar mısınız? 🙏"};
+        LinearLayout qrow = new LinearLayout(this);
+        qrow.setOrientation(LinearLayout.VERTICAL);
+        for (final String q : quick) {
+            Button qb = Ui.flatBtn(this, q, Ui.BLUE);
+            qb.setOnClickListener(v -> text.setText(q));
+            qrow.addView(qb);
+        }
+        l.addView(qrow);
+
+        final CheckBox speak = new CheckBox(this);
+        speak.setText("Sesli de oku 🔊");
+        speak.setChecked(true);
+        l.addView(speak);
+
+        final AlertDialog d = new AlertDialog.Builder(this)
+                .setTitle("Ekrana mesaj gönder")
+                .setView(l)
+                .setNegativeButton("Vazgeç", null)
+                .setPositiveButton("Gönder", null)
+                .create();
+        d.setOnShowListener(x -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String t = text.getText().toString().trim();
+            if (t.isEmpty()) {
+                text.setError("Bir şey yaz");
+                return;
+            }
+            String shortT = t.length() > 30 ? t.substring(0, 30) + "…" : t;
+            send("MSG", (speak.isChecked() ? "1" : "0") + "\n" + t, "Mesaj: " + shortT);
+            d.dismiss();
+        }));
+        d.show();
+    }
+
+    // ---------- Diğer uygulamalar ----------
+
+    private void requestApps() {
+        final Devices.Device d = single();
+        if (d == null) return;
+        appsFor = d;
+        appsWait = new ProgressDialog(this);
+        appsWait.setMessage(d.name + " telefonundaki uygulamalar isteniyor…\n(İnternet yavaşsa biraz sürebilir)");
+        appsWait.setCancelable(true);
+        appsWait.setOnCancelListener(x -> appsFor = null);
+        appsWait.show();
+        Sender.send(this, d, "APPS", "", "Uygulama listesi iste", false);
+        h.postDelayed(() -> {
+            if (appsFor == d && appsWait != null && appsWait.isShowing()) {
+                appsWait.dismiss();
+                appsFor = null;
+                Toast.makeText(this, "Cevap gelmedi. O telefonda internet ve Kumanda açık mı?", Toast.LENGTH_LONG).show();
+            }
+        }, 45_000);
+    }
+
+    private void onApps(Devices.Device d, List<String[]> apps) {
+        if (appsFor == null || !appsFor.code.equals(d.code)) return;
+        appsFor = null;
+        if (appsWait != null && appsWait.isShowing()) appsWait.dismiss();
+        if (isFinishing()) return;
+
+        final int n = apps.size();
+        final String[] labels = new String[n];
+        final String[] pkgs = new String[n];
+        final boolean[] checked = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            String[] a = apps.get(i);
+            checked[i] = "+".equals(a[0]);
+            labels[i] = a[1];
+            pkgs[i] = a[2];
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(d.name + ": engellenecekleri seç")
+                .setMultiChoiceItems(labels, checked, (dd, which, isChecked) -> checked[which] = isChecked)
+                .setNegativeButton("Vazgeç", null)
+                .setPositiveButton("Kaydet", (dd, w) -> {
+                    StringBuilder csv = new StringBuilder();
+                    int cnt = 0;
+                    for (int i = 0; i < n; i++) {
+                        if (!checked[i]) continue;
+                        if (csv.length() > 0) csv.append(',');
+                        csv.append(pkgs[i]);
+                        cnt++;
+                    }
+                    Sender.send(this, d, "BLOCKSET", csv.toString(),
+                            cnt == 0 ? "Diğer uygulama engellerini kaldır" : cnt + " uygulamayı engelle", true);
+                })
+                .show();
+    }
+
+    // ---------- Diğer ----------
+
+    private boolean batteryOk() {
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        return pm.isIgnoringBatteryOptimizations(getPackageName());
+    }
+
+    private void openBattery() {
+        try {
+            Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            i.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private void confirmReset() {
@@ -386,153 +579,20 @@ public class KumandaActivity extends Activity {
                 .setNegativeButton("Vazgeç", null)
                 .setPositiveButton("Sıfırla", (d, w) -> {
                     P.sp(this).edit().remove("role").apply();
+                    stopService(new Intent(this, KumandaService.class));
                     startActivity(new Intent(this, MainActivity.class));
                     finish();
                 })
                 .show();
     }
 
-    // ---------- Gönderme ----------
-
     private void send(String cmd, String arg, String label) {
-        List<Device> t = targets();
+        List<Devices.Device> t = targets();
         if (t.isEmpty()) {
             Toast.makeText(this, "Önce bir telefon ekle", Toast.LENGTH_SHORT).show();
             return;
         }
-        for (Device d : t) sendTo(d, cmd, arg, label);
-    }
-
-    private void sendTo(final Device d, final String cmd, final String arg, final String label) {
-        addLog("→ " + d.name + ": " + label);
-        new Thread(() -> {
-            boolean ok = Proto.post(Proto.topic(d.code), Proto.pack(d.code, cmd, arg));
-            h.post(() -> {
-                if (!ok) {
-                    addLog("✗ " + d.name + ": gönderilemedi (A35'te internet var mı?)");
-                    Toast.makeText(this, "Gönderilemedi — internet yok mu?", Toast.LENGTH_SHORT).show();
-                } else {
-                    Toast.makeText(this, "Gönderildi → " + d.name, Toast.LENGTH_SHORT).show();
-                }
-            });
-        }).start();
-    }
-
-    // ---------- Cevapları dinleme ----------
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        startStream();
-    }
-
-    @Override
-    protected void onPause() {
-        stopStream();
-        super.onPause();
-    }
-
-    private void restartStream() {
-        stopStream();
-        startStream();
-    }
-
-    private void startStream() {
-        if (devices.isEmpty()) return;
-        final Map<String, Device> byTopic = new HashMap<>();
-        StringBuilder topics = new StringBuilder();
-        for (Device d : devices) {
-            String rt = Proto.replyTopic(d.code);
-            byTopic.put(rt, d);
-            if (topics.length() > 0) topics.append(',');
-            topics.append(rt);
-        }
-        final String topicList = topics.toString();
-        streaming = true;
-        streamThread = new Thread(() -> {
-            int backoff = 2;
-            while (streaming) {
-                HttpURLConnection c = null;
-                try {
-                    long now = System.currentTimeMillis() / 1000L;
-                    long since = Math.max(P.lng(this, "reply_time"), now - 10 * 60);
-                    c = (HttpURLConnection) new URL(Proto.SERVER + topicList + "/json?since=" + since).openConnection();
-                    streamConn = c;
-                    c.setConnectTimeout(15000);
-                    c.setReadTimeout(100000);
-                    BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8));
-                    backoff = 2;
-                    String line;
-                    while (streaming && (line = br.readLine()) != null) {
-                        handleReply(byTopic, line);
-                    }
-                } catch (Exception ignored) {
-                } finally {
-                    if (c != null) {
-                        try {
-                            c.disconnect();
-                        } catch (Exception ignored) {
-                        }
-                    }
-                    streamConn = null;
-                }
-                if (!streaming) break;
-                try {
-                    Thread.sleep(backoff * 1000L);
-                } catch (InterruptedException e) {
-                    break;
-                }
-                backoff = Math.min(backoff * 2, 30);
-            }
-        }, "kumanda-cevap");
-        streamThread.start();
-    }
-
-    private void stopStream() {
-        streaming = false;
-        final HttpURLConnection c = streamConn;
-        if (c != null) {
-            new Thread(() -> {
-                try {
-                    c.disconnect();
-                } catch (Exception ignored) {
-                }
-            }).start();
-        }
-        if (streamThread != null) streamThread.interrupt();
-        streamThread = null;
-    }
-
-    private void handleReply(Map<String, Device> byTopic, String line) {
-        try {
-            JSONObject o = new JSONObject(line);
-            if (!"message".equals(o.optString("event"))) return;
-            if (!P.markSeen(this, "reply_seen", o.optString("id"))) return;
-            long t = o.optLong("time", 0);
-            if (t > P.lng(this, "reply_time")) P.put(this, "reply_time", t);
-            Device d = byTopic.get(o.optString("topic"));
-            if (d == null) return;
-            String[] cm = Proto.unpack(d.code, o.optString("message"), 24 * 3600);
-            if (cm == null || !"ACK".equals(cm[0])) return;
-            final String msg = "← " + d.name + ": " + cm[1];
-            h.post(() -> addLog(msg));
-        } catch (Exception ignored) {
-        }
-    }
-
-    // ---------- Kayıt ----------
-
-    private void addLog(String s) {
-        try {
-            JSONArray a = new JSONArray(P.str(this, "log", "[]"));
-            String time = new SimpleDateFormat("HH:mm", Locale.ROOT).format(new Date());
-            JSONArray n = new JSONArray();
-            n.put(time + "  " + s);
-            for (int i = 0; i < a.length() && i < 29; i++) n.put(a.getString(i));
-            P.put(this, "log", n.toString());
-        } catch (Exception ignored) {
-        }
-        renderLog();
+        for (Devices.Device d : t) Sender.send(this, d, cmd, arg, label, true);
     }
 
     private void renderLog() {
@@ -545,7 +605,7 @@ public class KumandaActivity extends Activity {
                 return;
             }
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < a.length() && i < 12; i++) {
+            for (int i = 0; i < a.length() && i < 14; i++) {
                 if (i > 0) sb.append('\n');
                 sb.append(a.getString(i));
             }
@@ -554,5 +614,4 @@ public class KumandaActivity extends Activity {
         } catch (Exception ignored) {
         }
     }
-
 }
