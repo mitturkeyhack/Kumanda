@@ -18,6 +18,8 @@ import android.view.accessibility.AccessibilityNodeInfo;
 public class BlockService extends AccessibilityService {
 
     private static volatile BlockService instance;
+    static volatile String lastPkg;
+    static volatile long lastEventAt;
 
     private final Handler h = new Handler(Looper.getMainLooper());
     private long lastKick;
@@ -76,7 +78,14 @@ public class BlockService extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent e) {
         if (e == null || e.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
         CharSequence pkg = e.getPackageName();
-        if (pkg != null) handle(pkg.toString());
+        if (pkg == null) return;
+        lastPkg = pkg.toString();
+        lastEventAt = System.currentTimeMillis();
+        try {
+            handle(pkg.toString());
+        } catch (Throwable t) {
+            P.put(this, "crash", "engel hatası: " + t);
+        }
     }
 
     private void checkNow() {

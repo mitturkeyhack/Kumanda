@@ -33,6 +33,11 @@ public class ListenerService extends Service {
     private volatile boolean running;
     private volatile HttpURLConnection conn;
     private Thread th;
+    private Thread guard;
+
+    boolean isRunning() {
+        return running;
+    }
 
     // Ses tuşlarına basılınca ses tavanını uygula
     private final BroadcastReceiver volRx = new BroadcastReceiver() {
@@ -101,6 +106,8 @@ public class ListenerService extends Service {
         running = true;
         th = new Thread(this::loop, "kumanda-dinle");
         th.start();
+        guard = new Thread(() -> Guard.loop(getApplicationContext(), this), "kumanda-yedek-engel");
+        guard.start();
     }
 
     @Override
@@ -133,6 +140,7 @@ public class ListenerService extends Service {
             }
         }
         if (th != null) th.interrupt();
+        if (guard != null) guard.interrupt();
         setStatus("Durduruldu");
         super.onDestroy();
     }

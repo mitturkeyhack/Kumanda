@@ -42,6 +42,7 @@ public final class Exec {
     }
 
     public static Result run(final Context c, String cmd, String arg) {
+        c0 = c.getApplicationContext();
         try {
             switch (cmd) {
                 case "PING":
@@ -188,7 +189,7 @@ public final class Exec {
         String warn = "";
         if (on) {
             BlockService.poke(); // şu an açıksa hemen kapat
-            if (!BlockService.isRunning()) warn = " (UYARI: Erişilebilirlik izni kapalı, engel çalışmaz!)";
+            warn = warnAcc();
         }
         return ok(app + (on ? " engellendi ⛔" : " serbest bırakıldı ✅") + warn);
     }
@@ -204,7 +205,7 @@ public final class Exec {
         P.put(c, Blocker.K_NIGHT_END, e);
         P.put(c, Blocker.K_NIGHT_ON, true);
         BlockService.poke();
-        String warn = BlockService.isRunning() ? "" : " (UYARI: Erişilebilirlik izni kapalı!)";
+        String warn = warnAcc();
         return ok("Gece engeli: her gün " + Blocker.hhmm(s) + " – " + Blocker.hhmm(e)
                 + " arası TikTok ve YouTube kapalı 🌙" + warn);
     }
@@ -249,12 +250,24 @@ public final class Exec {
                         .append(Blocker.hhmm(P.num(c, Blocker.K_CAP_E, 0))).append(")");
             }
         }
-        if (!BlockService.isRunning()) sb.append(" ⚠ Erişilebilirlik kapalı");
+        // --- Teşhis ---
+        sb.append("\n🔧 Engel: erişilebilirlik ").append(BlockService.isRunning() ? "✓" : (accessibilityOn(c) ? "AÇIK AMA ÇALIŞMIYOR ✗" : "kapalı ✗"));
+        sb.append(", kullanım erişimi ").append(Guard.usageOk(c) ? "✓" : "✗");
+        sb.append(", üstte gösterme ").append(Guard.overlayOk(c) ? "✓" : "✗");
+        String lp = BlockService.lastPkg;
+        if (lp == null) lp = Guard.lastFg;
+        if (lp != null) sb.append("\nSon açık uygulama: ").append(lp);
+        sb.append("\nYüklü: ").append(installedTargets(c));
+        String crash = P.str(c, "crash", null);
+        if (crash != null) sb.append("\nSon hata: ").append(crash.length() > 300 ? crash.substring(0, 300) : crash);
         return sb.toString();
     }
 
+    private static Context c0;
+
     private static String warnAcc() {
-        return BlockService.isRunning() ? "" : " (UYARI: Erişilebilirlik izni kapalı, engel çalışmaz!)";
+        if (BlockService.isRunning() || Guard.usageOk(c0)) return "";
+        return " (UYARI: Erişilebilirlik çalışmıyor ve yedek engel izni yok — engel çalışmaz!)";
     }
 
     private static Result blockSet(Context c, String arg) {
@@ -360,6 +373,20 @@ public final class Exec {
         BlockService.launch(c, i);
         Notifs.message(c, text, i);
         return ok("Mesaj ekranda gösterildi 💬" + (speak ? " (sesli okundu)" : ""));
+    }
+
+    private static String installedTargets(Context c) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            for (android.content.pm.ApplicationInfo ai : c.getPackageManager().getInstalledApplications(0)) {
+                String g = Blocker.group(ai.packageName);
+                if (g == null) continue;
+                if (sb.length() > 0) sb.append(", ");
+                sb.append(ai.packageName);
+            }
+        } catch (Exception ignored) {
+        }
+        return sb.length() == 0 ? "TikTok/YouTube bulunamadı" : sb.toString();
     }
 
     @SuppressWarnings("unused")

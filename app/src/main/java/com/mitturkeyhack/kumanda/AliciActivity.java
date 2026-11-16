@@ -28,8 +28,8 @@ public class AliciActivity extends Activity {
 
     private final Handler h = new Handler(Looper.getMainLooper());
     private TextView connText;
-    private TextView stAcc, stAdmin, stBattery;
-    private Button btAcc, btAdmin, btBattery;
+    private TextView stAcc, stAdmin, stBattery, stUsage, stOverlay;
+    private Button btAcc, btAdmin, btBattery, btUsage, btOverlay;
 
     private final Runnable refresher = new Runnable() {
         @Override
@@ -89,6 +89,26 @@ public class AliciActivity extends Activity {
         setup.addView(step("1. Uygulama engeli (TikTok / YouTube)",
                 "Erişilebilirlik ayarlarında \"Kumanda uygulama engeli\"ni AÇ.", stAcc, btAcc));
 
+        stUsage = status();
+        btUsage = Ui.btn(this, "Aç", Ui.BLUE);
+        btUsage.setOnClickListener(v -> openSimple(Settings.ACTION_USAGE_ACCESS_SETTINGS,
+                "Listede Kumanda'yı bul ve izin ver"));
+        setup.addView(step("1b. Yedek engel: Kullanım erişimi",
+                "Erişilebilirlik takılırsa engel bununla çalışır. \"Kullanım erişimi\"nde Kumanda'yı AÇ.", stUsage, btUsage));
+
+        stOverlay = status();
+        btOverlay = Ui.btn(this, "Aç", Ui.BLUE);
+        btOverlay.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (Exception e) {
+                openAppDetails();
+            }
+        });
+        setup.addView(step("1c. Diğer uygulamaların üstünde göster",
+                "\"Şu an çalışmıyor\" uyarısının çıkabilmesi için AÇ.", stOverlay, btOverlay));
+
         stAdmin = status();
         btAdmin = Ui.btn(this, "Aç", Ui.BLUE);
         btAdmin.setOnClickListener(v -> openAdmin());
@@ -109,8 +129,8 @@ public class AliciActivity extends Activity {
 
         Button btPerm = Ui.btn(this, "İzinler", Ui.SLATE);
         btPerm.setOnClickListener(v -> openAppDetails());
-        setup.addView(step("5. Wi‑Fi / Bluetooth izni (Redmi)",
-                "İzinler › Diğer izinler: \"Wi‑Fi'yi değiştir\" ve \"Bluetooth'u aç/kapat\" → İzin ver.",
+        setup.addView(step("5. Redmi izinleri",
+                "İzinler › Diğer izinler: \"Arka planda çalışırken açılır pencere\", \"Kilit ekranında göster\", \"Wi‑Fi'yi değiştir\", \"Bluetooth'u aç/kapat\" → hepsine İzin ver.",
                 null, btPerm));
 
         root.addView(setup);
@@ -169,7 +189,17 @@ public class AliciActivity extends Activity {
         connText.setText(s);
         connText.setTextColor(s.startsWith("Bağlı") ? Ui.GREEN : Ui.ORANGE);
 
-        mark(stAcc, btAcc, accessibilityOn());
+        boolean accSet = accessibilityOn();
+        boolean accRun = BlockService.isRunning();
+        if (accSet && !accRun) {
+            stAcc.setText("⚠ Açık ama ÇALIŞMIYOR — ayarda kapatıp tekrar aç");
+            stAcc.setTextColor(Ui.ORANGE);
+            btAcc.setAlpha(1f);
+        } else {
+            mark(stAcc, btAcc, accRun);
+        }
+        mark(stUsage, btUsage, Guard.usageOk(this));
+        mark(stOverlay, btOverlay, Guard.overlayOk(this));
         mark(stAdmin, btAdmin, adminOn());
         mark(stBattery, btBattery, batteryOk());
     }
@@ -180,8 +210,16 @@ public class AliciActivity extends Activity {
         bt.setAlpha(ok ? 0.45f : 1f);
     }
 
+    private void openSimple(String action, String toast) {
+        try {
+            startActivity(new Intent(action));
+            Toast.makeText(this, toast, Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            openAppDetails();
+        }
+    }
+
     private boolean accessibilityOn() {
-        if (BlockService.isRunning()) return true;
         String s = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
         return s != null && s.toLowerCase(Locale.ROOT).contains(getPackageName().toLowerCase(Locale.ROOT) + "/");
     }
