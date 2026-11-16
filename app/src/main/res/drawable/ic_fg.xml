@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- sinyal dalgaları -->
+    <path android:strokeColor="#BFDBFE" android:strokeWidth="3" android:strokeLineCap="round"
+        android:pathData="M45,25 A12,12 0 0 1 63,25" />
+    <path android:strokeColor="#BFDBFE" android:strokeWidth="3" android:strokeLineCap="round"
+        android:pathData="M40,20 A19,19 0 0 1 68,20" />
+    <!-- kumanda gövdesi -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M45,30 h18 a5,5 0 0 1 5,5 v40 a5,5 0 0 1 -5,5 h-18 a5,5 0 0 1 -5,-5 v-40 a5,5 0 0 1 5,-5 z" />
+    <!-- güç düğmesi -->
+    <path android:fillColor="#EF4444"
+        android:pathData="M49,40 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <!-- tuşlar -->
+    <path android:fillColor="#2563EB"
+        android:pathData="M46,52 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M56,52 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M46,61 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M56,61 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M46,70 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M56,70 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+</vector>
