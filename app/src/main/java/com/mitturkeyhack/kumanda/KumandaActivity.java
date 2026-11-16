@@ -185,7 +185,9 @@ public class KumandaActivity extends Activity {
         c4.addView(Ui.row(this,
                 cmdBtn("🔒 Ekranı kilitle", Ui.ORANGE, "LOCK", ""),
                 cmdBtn("ℹ️ Durumu sor", Ui.SLATE, "STATUS", "")));
-        c4.addView(Ui.row(this, cmdBtn("Çalmayı durdur", Ui.SLATE, "RING_STOP", "")));
+        Button low = Ui.btn(this, "🪫 Şarj az uyarısı…", Ui.ORANGE);
+        low.setOnClickListener(v -> askLowBat());
+        c4.addView(Ui.row(this, low, cmdBtn("Çalmayı durdur", Ui.SLATE, "RING_STOP", "")));
         root.addView(c4);
 
         // Cevaplar
@@ -451,6 +453,16 @@ public class KumandaActivity extends Activity {
                             })
                             .show();
                 })
+                .show();
+    }
+
+    private void askLowBat() {
+        final int[] pcts = {3, 5, 10, 15};
+        String[] items = {"%3 kaldı", "%5 kaldı", "%10 kaldı", "%15 kaldı"};
+        new AlertDialog.Builder(this)
+                .setTitle("Ekranda \"Pil seviyesi düşük\" uyarısı çıksın")
+                .setItems(items, (d, w) -> send("LOWBAT", String.valueOf(pcts[w]),
+                        "Şarj az uyarısı (%" + pcts[w] + ")"))
                 .show();
     }
 

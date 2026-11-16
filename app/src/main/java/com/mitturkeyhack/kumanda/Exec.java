@@ -91,6 +91,19 @@ public final class Exec {
                     Ringer.start(c, sec);
                     return ok("Telefon çalıyor 🔔 (" + sec + " sn)");
                 }
+                case "LOWBAT": {
+                    int pct = 5;
+                    try {
+                        pct = Integer.parseInt(arg);
+                    } catch (Exception ignored) {
+                    }
+                    Intent i = new Intent(c, BlockedActivity.class);
+                    i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                    i.putExtra("title", "Pil seviyesi düşük");
+                    i.putExtra("msg", "%" + pct + " kaldı.\nŞarj cihazını takın.");
+                    BlockService.launch(c, i);
+                    return ok("Şarj az uyarısı gösterildi 🪫 (%" + pct + ")");
+                }
                 case "RING_STOP":
                     Ringer.stop(null);
                     return ok("Çalma durduruldu");
